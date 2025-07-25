@@ -51,7 +51,7 @@ def export_to_local(image, region, filepath, scale=10, crs="EPSG:4326"):
         filename=filepath,
         scale=scale,
         crs=crs,
-        max_tile_size=8  # LIMIT TILE SIZE TO REDUCE MEMORY BURST
+        max_tile_size=4  # LIMIT TILE SIZE TO REDUCE MEMORY BURST
     )
 
 def run_feature_extraction(aoi_path, output_dir, years=[2020, 2021, 2022, 2023, 2024]):
