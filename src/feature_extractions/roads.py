@@ -24,7 +24,7 @@ def buffer_aoi(aoi_gdf, buffer_m=1000, temp_dir="data/temp"):
 
 
 def load_roads_clipped(roads_path, buffered_aoi, temp_dir="data/temp"):
-    print("📦 Loading and clipping roads shapefile...")
+    print("📦 Loading and clipping roads shapefile, this may take a while...")
     clipped_path = os.path.join(temp_dir, "roads_clipped.geojson")
 
     if os.path.exists(clipped_path):
@@ -91,7 +91,7 @@ def clip_raster_to_aoi(raster_path, aoi_gdf, out_path):
             aoi.geometry, 
             crop=True,            # tightly crop
             all_touched=False,    # only include fully inside pixels
-            nodata=np.nan         # optional: force nodata
+            nodata=np.nan         
         )
         out_meta = src.meta.copy()
         out_meta.update({

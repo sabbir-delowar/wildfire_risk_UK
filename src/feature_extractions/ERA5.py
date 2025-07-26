@@ -1,10 +1,13 @@
+import os
 import ee
 import geemap
-import os
-import glob
-import rasterio
+import geopandas as gpd
 import numpy as np
-from src.feature_extractions.sentinel import load_aoi
+import rasterio
+from rasterio.merge import merge
+from shapely.geometry import box
+from glob import glob
+
 
 def initialise_gee():
     try:
@@ -13,93 +16,101 @@ def initialise_gee():
         ee.Authenticate()
         ee.Initialize()
 
-def kelvin_to_celsius(image):
-    return image.subtract(273.15)
 
-def compute_relative_humidity(temp_k, dew_k):
-    """Approximate RH from temp and dew point in Kelvin"""
-    return dew_k.subtract(273.15).subtract(temp_k.subtract(273.15)) \
-        .multiply(-17.625).divide(dew_k.subtract(273.15).subtract(243.04)) \
-        .exp().multiply(100).rename("rh")
+def load_aoi_with_bounds(aoi_path):
+    gdf = gpd.read_file(aoi_path)
+    if gdf.crs is None:
+        print("⚠️ AOI has no CRS. Forcing to EPSG:4326.")
+        gdf.set_crs("EPSG:4326", inplace=True)
+    gdf = gdf.to_crs("EPSG:4326")
+    return geemap.geopandas_to_ee(gdf), gdf.total_bounds
 
-def extract_monthly_images(aoi, year_range=(2020, 2024), months=[6, 7, 8]):
-    era = ee.ImageCollection("ECMWF/ERA5_LAND/HOURLY").filterBounds(aoi)
-    results = []
 
-    for year in range(year_range[0], year_range[1] + 1):
-        for month in months:
-            filtered = era.filter(ee.Filter.calendarRange(year, year, 'year')) \
-                          .filter(ee.Filter.calendarRange(month, month, 'month'))
+def split_aoi_into_tiles(bounds, tile_size_deg=1):
+    minx, miny, maxx, maxy = bounds
+    tiles = []
+    x = minx
+    while x < maxx:
+        y = miny
+        while y < maxy:
+            tile = box(x, y, min(x + tile_size_deg, maxx), min(y + tile_size_deg, maxy))
+            tiles.append(tile)
+            y += tile_size_deg
+        x += tile_size_deg
+    return tiles
 
-            label = f"{year}_{month:02d}"
+        
+def export_tile(image, tile_geom, filepath, scale=11132):
+    gdf = gpd.GeoDataFrame(geometry=[tile_geom], crs="EPSG:4326")
+    ee_tile = geemap.geopandas_to_ee(gdf)
 
-            temp = kelvin_to_celsius(filtered.select("temperature_2m").mean()).clip(aoi).rename(f"temp_{label}")
-            precip = filtered.select("total_precipitation").sum().multiply(1000).clip(aoi).rename(f"precip_{label}")
-            dew = filtered.select("dewpoint_temperature_2m").mean().clip(aoi)
-            rh = compute_relative_humidity(filtered.select("temperature_2m").mean(), dew).clip(aoi).rename(f"rh_{label}")
+    try:
+        geemap.download_ee_image(
+            image=image,
+            region=ee_tile.geometry(),
+            filename=filepath,
+            scale=scale,
+            crs="EPSG:4326",
+            max_tile_size=4
+        )
+    except Exception as e:
+        print(f"❌ Failed to export tile: {e}")
 
-            results.append((temp, precip, rh, label))
-    return results
+        
+def extract_and_export_era5_monthly(aoi_path, variable, output_dir="data/temp/ERA5", tile_size_deg=1):
+    initialise_gee()
+    aoi, bounds = load_aoi_with_bounds(aoi_path)
+    os.makedirs(output_dir, exist_ok=True)
 
-def export_climate_image(image, aoi, out_path, scale=5000, crs="EPSG:4326"):
-    print(f"⬇️ Downloading {os.path.basename(out_path)}...")
-    geemap.download_ee_image(
-        image=image,
-        region=aoi.geometry(),
-        filename=out_path,
-        scale=scale,
-        crs=crs,
-        max_tile_size=8
+    image = (
+        ee.ImageCollection("ECMWF/ERA5_LAND/MONTHLY_AGGR")
+        .filter(ee.Filter.calendarRange(6, 8, 'month'))
+        .filter(ee.Filter.calendarRange(2020, 2024, 'year'))
+        .median()
+        .select(variable)
     )
 
-def run_monthly_climate_extraction(aoi_path, output_dir, temp_dir="data/tempERA5"):
-    print("📦 Starting monthly climate feature extraction...")
-    initialise_gee()
-    aoi = load_aoi(aoi_path)
     os.makedirs(output_dir, exist_ok=True)
+    tiles = split_aoi_into_tiles(bounds, tile_size_deg=tile_size_deg)
 
-    monthly_data = extract_monthly_images(aoi)
+    for i, tile_geom in enumerate(tiles):
+        out_fp = os.path.join(output_dir, f"ERA5_{variable}_tile{i+1}.tif")
+        if not os.path.exists(out_fp):
+            print(f"⬇️ Exporting tile {i+1}/{len(tiles)}")
+            export_tile(image, tile_geom, out_fp)
+        else:
+            print(f"✅ Tile {i+1} already exists, skipping.")
 
-    for temp, precip, rh, label in monthly_data:
-        export_climate_image(temp, aoi, os.path.join(temp_dir, f"temp_{label}.tif"))
-        export_climate_image(precip, aoi, os.path.join(temp_dir, f"precip_{label}.tif"))
-        export_climate_image(rh, aoi, os.path.join(temp_dir, f"rh_{label}.tif"))
+    print(f"✅ All ERA5 {variable} tiles exported.")
+        
+        
+def compute_era5_mean_composites(output_dir, variable, input_dir="data/temp/ERA5"):
+    print(f"🔄 Merging {variable} tiles...")
 
-    print("✅ Monthly climate extraction done (temp, precip, humidity).\n")
-    
-    
+    search_pattern = os.path.join(input_dir, f"ERA5_{variable}_tile*.tif")
+    ERA5_files = sorted(glob(search_pattern))
 
+    if not ERA5_files:
+        raise FileNotFoundError(f"No ERA5 tiles found in: {input_dir}")
 
-def create_mean_composites(output_dir, input_dir="data/temp/ERA5"):
-    print("📦 Creating mean composites from ERA5 monthly rasters...")
-    os.makedirs(output_dir, exist_ok=True)
+    src_files_to_mosaic = [rasterio.open(fp) for fp in ERA5_files]
+    mosaic, out_trans = merge(src_files_to_mosaic)
 
-    variables = ["temp", "precip", "rh"]
+    out_meta = src_files_to_mosaic[0].meta.copy()
+    out_meta.update({
+        "driver": "GTiff",
+        "height": mosaic.shape[1],
+        "width": mosaic.shape[2],
+        "transform": out_trans,
+        "count": 1,
+        "dtype": mosaic.dtype
+    })
 
-    for var in variables:
-        files = sorted(glob.glob(os.path.join(input_dir, f"{var}_*.tif")))
-        if not files:
-            print(f"⚠️ No files found for {var}")
-            continue
+    out_path = os.path.join(output_dir, f"{variable}_merged.tif")
+    with rasterio.open(out_path, "w", **out_meta) as dest:
+        dest.write(mosaic[0], 1)
 
-        print(f"📂 {var.upper()}: {len(files)} files found. Computing mean...")
+    for src in src_files_to_mosaic:
+        src.close()
 
-        # Read first file to get metadata
-        with rasterio.open(files[0]) as src0:
-            meta = src0.meta.copy()
-            data_stack = np.zeros((len(files), src0.height, src0.width), dtype=np.float32)
-
-        # Read all files into the stack
-        for i, f in enumerate(files):
-            with rasterio.open(f) as src:
-                data = src.read(1).astype(np.float32)
-                data[data == src.nodata] = np.nan
-                data_stack[i, :, :] = data
-
-        mean_data = np.nanmean(data_stack, axis=0).astype(np.float32)
-
-        out_path = os.path.join(output_dir, f"{var}_mean_2020_2024.tif")
-        with rasterio.open(out_path, "w", **meta) as dst:
-            dst.write(mean_data, 1)
-
-        print(f"✅ Saved mean composite: {out_path}")
+    print(f"✅ Merged ERA5 saved to: {out_path}")

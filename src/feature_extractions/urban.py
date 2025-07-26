@@ -8,6 +8,7 @@ from rasterio.mask import mask
 from rasterio.transform import from_origin
 from scipy.ndimage import distance_transform_edt
 
+
 def extract_urban_mask(corine_path, urban_classes=[111, 112, 121, 122, 123, 124]):
     print("📦 Extracting urban mask from CORINE...")
     with rasterio.open(corine_path) as src:
@@ -18,12 +19,14 @@ def extract_urban_mask(corine_path, urban_classes=[111, 112, 121, 122, 123, 124]
     urban_mask = np.isin(corine, urban_classes).astype(np.uint8)
     return urban_mask, profile
 
+
 def compute_distance_from_mask(mask_array, profile):
     print("📦 Computing distance transform...")
     # Invert mask: distance_transform_edt computes distance to non-zero
     inverted = (mask_array == 0).astype(np.uint8)
     distances = distance_transform_edt(inverted) * profile["transform"][0]  # scale to meters
     return distances
+
 
 def clip_to_aoi(raster, profile, aoi_path):
     print("📦 Clipping distance raster to original AOI...")
@@ -40,8 +43,9 @@ def clip_to_aoi(raster, profile, aoi_path):
             })
     return out_image[0], out_meta
 
+
 def run_distance_to_urban(original_aoi_path, output_dir,
-                          corine_path="data/processed/corine-2018.tif",
+                          corine_path="data/processed/corine_2018_merged.tif",
                           buffered_aoi_path="data/temp/aoi_buffered_1000m.geojson"
                          ):
     urban_mask, profile = extract_urban_mask(corine_path)
