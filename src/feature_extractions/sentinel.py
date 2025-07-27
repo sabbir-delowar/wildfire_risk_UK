@@ -80,15 +80,16 @@ def run_sentinel_index_download(aoi_path, index_type, output_dir="data/temp/sent
     initialise_gee()
     print(f"📦 Starting Sentinel download for index: {index_type}")
 
-    aoi_gdf = load_aoi(aoi_path)
+    aoi_gdf = gpd.read_file(aoi_path).to_crs("EPSG:4326")
     tiles = split_aoi_into_tiles(aoi_gdf, tile_size_deg=0.2)
     os.makedirs(output_dir, exist_ok=True)
 
     for year in years:
+        year_dir = os.path.join(output_dir, index_type.lower(), str(year))
         os.makedirs(year_dir, exist_ok=True)
 
         for i, tile in enumerate(tiles):
-            out_path = os.path.join(output_dir, f"{index_type.lower()}_tile{i}.tif")
+            out_path = os.path.join(year_dir, f"{index_type.lower()}_tile{i}.tif")
             if os.path.exists(out_path):
                 print(f"✅ Already exists: {out_path}")
                 continue
@@ -107,6 +108,12 @@ def compute_mean_composite(index_type, output_dir, index_dir="data/temp/sentinel
     aligning all rasters to the common union extent and resolution.
     """
     print(f"📦 Calculating mean for {index_type}...")
+    
+    os.makedirs(output_dir, exist_ok=True)
+    out_path = os.path.join(output_dir, f"{index_type}_mean_2020_2024.tif")
+    if os.path.exists(out_path):
+        print(f"✅ {index_type} raster exists: {out_path}")
+        return out_path
 
     search_path = os.path.join(index_dir, index_type.lower())
     file_pattern = os.path.join(search_path, "**", f"{index_type.lower()}_*.tif")
@@ -169,8 +176,7 @@ def compute_mean_composite(index_type, output_dir, index_dir="data/temp/sentinel
         "nodata": np.nan
     }
 
-    os.makedirs(output_dir, exist_ok=True)
-    out_path = os.path.join(output_dir, f"{index_type}_mean_2020_2024.tif")
+
     with rasterio.open(out_path, "w", **meta) as dst:
         dst.write(mean.astype(dtype), 1)
 

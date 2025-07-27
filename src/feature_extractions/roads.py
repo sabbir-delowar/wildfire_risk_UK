@@ -116,6 +116,5 @@ def run_distance_to_roads(aoi_path, output_dir, roads_path, temp_dir="data/temp"
     final_raster = os.path.join(output_dir, "distance-to-roads.tif")
 
     clip_raster_to_aoi(tmp_raster, aoi, final_raster)
-    os.remove(tmp_raster)
 
     print(f"✅ Final clipped distance raster saved to: {final_raster}\n")

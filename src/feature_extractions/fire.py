@@ -58,6 +58,9 @@ def run_fire_extraction_firms(aoi_path, output_dir, start_date="2020-01-01", end
 
     os.makedirs(output_dir, exist_ok=True)
     out_path = os.path.join(output_dir, f"firms_fire_count_{start_date[:4]}_{end_date[:4]}.tif")
+    if os.path.exists(out_path):
+        print(f"✅ Fire count raster exists: {out_path}")
+        return out_path
 
     export_fire_count_raster(fire_image, aoi, out_path)
     return out_path
