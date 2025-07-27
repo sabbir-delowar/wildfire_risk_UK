@@ -32,7 +32,7 @@ The script prompts for an AOI GeoJSON file and a roads dataset and writes proces
 ## Requirements
 Install the necessary Python packages:
 ```bash
-pip install geopandas rasterio geemap scikit-learn joblib
+pip install requirement.txt
 ```
 
 ## License
