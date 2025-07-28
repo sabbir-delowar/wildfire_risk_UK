@@ -51,7 +51,7 @@ def split_aoi_into_tiles(gdf, tile_size_deg=1):
 def get_index_image(index_type, year, aoi_tile):
     s2 = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED") \
         .filterBounds(aoi_tile) \
-        .filter(ee.Filter.calendarRange(6, 8, 'month')) \
+        .filter(ee.Filter.calendarRange(2, 4, 'month')) \
         .filter(ee.Filter.calendarRange(year, year, 'year')) \
         .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
 
@@ -106,9 +106,10 @@ def compute_mean_composite(index_type, output_dir, index_dir="data/temp/sentinel
     """
     Computes mean composite from yearly rasters (e.g., NDVI, NDWI),
     aligning all rasters to the common union extent and resolution.
+    Skips files that raise exceptions during reading or reprojection.
     """
     print(f"📦 Calculating mean for {index_type}...")
-    
+
     os.makedirs(output_dir, exist_ok=True)
     out_path = os.path.join(output_dir, f"{index_type}_mean_2020_2024.tif")
     if os.path.exists(out_path):
@@ -131,9 +132,15 @@ def compute_mean_composite(index_type, output_dir, index_dir="data/temp/sentinel
     # Step 2: Compute union bounds
     bounds_list = []
     for fp in index_files:
-        with rasterio.open(fp) as src:
-            bounds = src.bounds
-            bounds_list.append(bounds)
+        try:
+            with rasterio.open(fp) as src:
+                bounds_list.append(src.bounds)
+        except Exception as e:
+            print(f"⚠️ Skipping {fp} due to error in bounds read: {e}")
+
+    if not bounds_list:
+        raise RuntimeError("No valid files found to compute bounds.")
+
     minx = min(b[0] for b in bounds_list)
     miny = min(b[1] for b in bounds_list)
     maxx = max(b[2] for b in bounds_list)
@@ -144,21 +151,26 @@ def compute_mean_composite(index_type, output_dir, index_dir="data/temp/sentinel
     dst_transform = rasterio.transform.from_origin(minx, maxy, *dst_res)
 
     arrays = []
-
     for fp in index_files:
-        with rasterio.open(fp) as src:
-            with WarpedVRT(
-                src,
-                crs=dst_crs,
-                transform=dst_transform,
-                width=dst_width,
-                height=dst_height,
-                resampling=Resampling.bilinear
-            ) as vrt:
-                data = vrt.read(1).astype(np.float32)
-                if vrt.nodata is not None:
-                    data = np.where(data == vrt.nodata, np.nan, data)
-                arrays.append(data)
+        try:
+            with rasterio.open(fp) as src:
+                with WarpedVRT(
+                    src,
+                    crs=dst_crs,
+                    transform=dst_transform,
+                    width=dst_width,
+                    height=dst_height,
+                    resampling=Resampling.bilinear
+                ) as vrt:
+                    data = vrt.read(1).astype(np.float32)
+                    if vrt.nodata is not None:
+                        data = np.where(data == vrt.nodata, np.nan, data)
+                    arrays.append(data)
+        except Exception as e:
+            print(f"⚠️ Skipping {fp} due to read/reproject error: {e}")
+
+    if not arrays:
+        raise RuntimeError("No valid rasters to compute mean composite.")
 
     # Step 3: Stack and compute mean
     stack = np.stack(arrays)
@@ -176,8 +188,8 @@ def compute_mean_composite(index_type, output_dir, index_dir="data/temp/sentinel
         "nodata": np.nan
     }
 
-
     with rasterio.open(out_path, "w", **meta) as dst:
         dst.write(mean.astype(dtype), 1)
 
     print(f"✅ Saved mean {index_type} to: {out_path}")
+    return out_path
